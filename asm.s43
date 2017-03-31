@@ -1,0 +1,149 @@
+/*-------------------- Projeto Controle Motor DC 1.0 ---------------------------
+
+Desenvolvido por:       Camilla F. Amaral
+                        Lorrane L. de Souza Cantero
+                        Lucas de S. Arcanjo
+                        Maria Julia A. Sales
+
+Professor:              Joel A. dos Santos
+
+Descrição: O programa é responsável pelo acionamento de dois motores DC de forma
+independente, através de 3 chaves (CH1 do tipo 2 estados, CH2 e CH3 do tipo push).
+------------------------------------------------------------------------------*/
+
+#include "msp430.h"                     ; #define controlled include file
+
+        NAME    main                    ; module name
+
+        PUBLIC  main                    ; make the main label vissible
+                                        ; outside this module
+        ORG     0FFFEh
+        DC16    init                    ; set reset vector to 'init' label
+        
+        ORG     0FFE4h                  ; Endereço de interrupção de P1 para o MSP430G2553
+        DC16    INTRR1
+
+        RSEG    CSTACK                  ; pre-declaration of segment
+        RSEG    CODE                    ; place program in 'CODE' segment
+
+K       EQU     750
+;------------------------- PROGRAMA PRINCIPAL ---------------------------------
+;R5 --> Registrador indicador do estado do Motor 1
+;R6 --> Registrador indicador do estado do Motor 2
+;R7 --> Registrador indicador de erro
+;R11 --> Registrador indicador do tempo [ms] da rotina de delay
+
+init:   MOV     #SFE(CSTACK), SP        ; set up stack
+
+main:   NOP                             ; main program
+        MOV.W   #WDTPW+WDTHOLD,&WDTCTL  ; Stop watchdog timer
+        
+;DEFINE PORTAS GPIO, RESISTENCIAS DE PULL UP E INTERRUPÇÕES
+        
+        BIC.B   #0x07, P1DIR            ;Define como entrada os pinos 0000 0111
+        BIS.B   #0x3F, P2DIR            ;Define como saída os pinos 0011 1111
+        BIC.B   #0x3F, P2OUT            ;Define como nível 0 todas as saídas (evitando problemas de acionamento indesejado do motor inicialmente)
+        
+        BIS.B   #0x07, P1REN            ;Habilita resistores de pull-up/pull-down para as portas 0000 0111
+        BIC.B   #0x07, P1OUT            ;Seleciona resistores de pull-up para 0000 0111
+        
+        BIS.B   #0x06, P1IES            ;Seleciona borda de descida para interrupções
+        BIS.B   #0x06, P1IE             ;Habilita interrupções para os pinos 0000 0110
+        
+;MODO DE ESPERA LPM4 + INTERRUPÇÕES HABILITADAS
+
+        BIS.B   #LPM4+GIE, SR           ;Habilita o standby + Interrupção Geral
+        NOP
+        
+        JMP $                           ; jump to current location '$'
+        
+;---------------------------INTERRUPÇÃO DE P1 ---------------------------------
+INTRR1:
+        MOV.B   P1IN, R4
+        BIC.B   #0xFE, R4               ;Reseta os outros bits para que a comparação funcione
+        BIT.B   #0x01, R4               ;Testa P1.0 a fim de identificar o motor que o usuário deseja acionar
+        JNZ     M2
+        JMP     M1
+        
+volta:
+        BIC.B   #0x07, P1IFG
+        RETI
+
+;------------------------------- MOTOR 1 --------------------------------------
+M1:
+        CMP.B   #0xFF, R5               ;R5 indica o estado de M1 (R5 == 0xFF - M1 acionado; R5 == 0x00 - M1 parado)
+        JZ      parar1
+                                        ;Identifica o botão acionado
+        CMP.B   #0x02, P1IFG            ;Teste da chave Sentido Horário/Parar
+        JZ      hp1
+        CMP.B   #0x04, P1IFG            ;Teste da chave Sentido Antihorário/Parar
+        JZ      ap1
+        MOV.B   #0xFF, R7               ;Indicador de erro ativado
+        JMP     fim1                    ;Se nenhuma dessas chaves foi pressionada, termina
+        
+hp1     
+        BIC.B   #0x07, P2OUT            ;Reseta 0000 0111 para evitar acionamento indesejado
+        BIS.B   #0x05, P2OUT            ;Seta 0000 0101, habilitando a Ponte H e definindo o sentido de M1 como  'Forward'
+        MOV.B   #0xFF, R5               ;Seta o sinalizador indicando o acionamento de M1
+        JMP     fim1
+        
+ap1      
+        BIC.B   #0x07, P2OUT            ;Reseta 0000 0111 para evitar acionamento indesejado
+        BIS.B   #0x06, P2OUT            ;Seta 0000 0110, habilitando a Ponte H e definindo o sentido de M1 como 'Reverse'
+        MOV.B   #0xFF, R5               ;Seta o sinalizador indicando o acionamento de M1
+        JMP     fim1
+        
+parar1
+        BIS.B   #0x07, P2OUT            ;Seta 0000 0111, habilitando a Ponte H e efetuando a parada de M1
+        CLR.B   R5                      ;Reseta o sinalizador indicando M1 parado
+        
+fim1    
+        MOV.B   #2, R11
+        JMP     volta
+        
+;------------------------------- MOTOR 2 --------------------------------------
+M2:
+        CMP.B   #0xFF, R6               ;R6 indica o estado de M2 (R6 == 0xFF - M1 acionado; R6 == 0x00 - M2 parado)
+        JZ      parar2
+                                        ;Identifica o botão acionado
+        CMP.B   #0x02, P1IFG            ;Teste da chave Sentido Horário/Parar
+        JZ      hp2
+        CMP.B   #0x04, P1IFG            ;Teste da chave Sentido Antihorário/Parar
+        JZ      ap2
+        MOV.B   #0xFF, R7               ;Indicador de erro ativado
+        JMP     fim2                    ;Se nenhuma dessas chaves foi pressionada, termina
+        
+hp2     
+        BIC.B   #0x38, P2OUT            ;Reseta 0011 1000 para evitar acionamento indesejado
+        BIS.B   #0x28, P2OUT            ;Seta 0010 1000, habilitando a Ponte H e definindo o sentidode M2 como 'Forward'
+        MOV.B   #0xFF, R6               ;Seta o sinalizador indicando o acionamento de M2
+        JMP     fim2
+        
+ap2      
+        BIC.B   #0x38, P2OUT            ;Reseta 0011 1000 para evitar acionamento indesejado
+        BIS.B   #0x30, P2OUT            ;Seta 0011 0000, habilitando a Ponte H e definindo o sentido de M2 como 'Reverse'
+        MOV.B   #0xFF, R6               ;Seta o sinalizador indicando o acionamento de M2
+        JMP     fim2
+        
+parar2
+        BIS.B   #0x38, P2OUT            ;Seta 0000 0111, habilitando a Ponte H e efetuando a parada de M2
+        CLR.B   R6                      ;Reseta o sinalizador inidicando M2 parado
+        
+fim2    MOV.B   #2, R11
+        JMP     volta
+
+;-------------------------------- DELAY ---------------------------------------
+
+DELAY:
+        PUSH R5 
+        MOV     #K, R5 
+return
+        DEC     R5 
+        JNZ     return
+        POP     R5 
+        RET 
+
+;------------------------------------------------------------------------------
+        
+        END                             ;Fim do programa
+        
